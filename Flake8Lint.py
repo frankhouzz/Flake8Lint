@@ -28,6 +28,20 @@ __version__ = '2.4.3'
 
 # copy-pasted from flake8.engine
 FLAKE8_NOQA = re.compile(r'flake8[:=]\s*noqa', re.I).search
+NOQA_INLINE_REGEXP = re.compile(
+    # We're looking for items that look like this:
+    # ``# noqa``
+    # ``# noqa: E123``
+    # ``# noqa: E123,W451,F921``
+    # ``# NoQA: E123,W451,F921``
+    # ``# NOQA: E123,W451,F921``
+    # We do not care about the ``: `` that follows ``noqa``
+    # We do not care about the casing of ``noqa``
+    # We want a comma-separated list of errors
+    '# noqa(?:: (?P<codes>([A-Z][0-9]+(?:[,\s]+)?)+))?',
+    re.IGNORECASE
+)
+NOQA_COMMA_SEPARATED_LIST_RE = re.compile(r'[,\s]')
 
 # copy-pasted from pep8
 COMPARE_SINGLETON_REGEX = re.compile(r'(?:[=!]=)\s*(?:None|False|True)')
@@ -302,13 +316,26 @@ def filename_match(filename, patterns):
     return False
 
 
-def skip_line_lint(line):
+def skip_line_lint(line, error_code):
     """Check if we need to skip line check.
 
     Returns `True` if line ends with '# noqa' or '# NOQA' comment.
     """
     def _noqa(line):
-        """Check if line ends with 'noqa' comment."""
+        """Check if line has 'noqa' comment."""
+        noqa_match = NOQA_INLINE_REGEXP.search(line)
+        if noqa_match is None:
+            return False
+        else:
+            codes_str = noqa_match.groupdict()['codes']
+            if not codes_str:   # no specific error, skip all
+                return True
+
+            if error_code in NOQA_COMMA_SEPARATED_LIST_RE.split(codes_str):
+                return True
+            else:
+                return False
+
         return line.strip().lower().endswith('# noqa')
 
     skip = _noqa(line)
@@ -831,15 +858,15 @@ class LintReport(object):
             full_line_text = self.view.substr(full_line)
             line_text = full_line_text.rstrip('\r\n')
 
+            # parse error line to get error code
+            error_code, __ = error_text.split(' ', 1)
+
             # skip line if 'noqa' defined
-            if skip_line_lint(line_text):
+            if skip_line_lint(line_text, error_code):
                 log("skip '{0}' in line {1} due to 'noqa' comment".format(
                     error_text, error_line
                 ))
                 continue
-
-            # parse error line to get error code
-            error_code, __ = error_text.split(' ', 1)
 
             # check if user has a setting for select only errors to show
             if self.select:
